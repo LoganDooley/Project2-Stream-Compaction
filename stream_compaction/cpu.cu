@@ -3,6 +3,8 @@
 
 #include "common.h"
 
+#include <memory>
+
 namespace StreamCompaction {
     namespace CPU {
         using StreamCompaction::Common::PerformanceTimer;
@@ -17,10 +19,24 @@ namespace StreamCompaction {
          * For performance analysis, this is supposed to be a simple for loop.
          * (Optional) For better understanding before starting moving to GPU, you can simulate your GPU scan in this function first.
          */
-        void scan(int n, int *odata, const int *idata) {
-            timer().startCpuTimer();
-            // TODO
-            timer().endCpuTimer();
+        void scan(int n, int *odata, const int *idata, bool useTimer) {
+            if (useTimer) {
+                timer().startCpuTimer();
+            }
+            if (n == 0) {
+                if (useTimer) {
+                    timer().endCpuTimer();
+                }
+                return;
+            }
+
+            odata[0] = 0;
+            for (int i = 1; i < n; i++) {
+                odata[i] = odata[i - 1] + idata[i - 1];
+            }
+            if (useTimer) {
+                timer().endCpuTimer();
+            }
         }
 
         /**
@@ -30,9 +46,15 @@ namespace StreamCompaction {
          */
         int compactWithoutScan(int n, int *odata, const int *idata) {
             timer().startCpuTimer();
-            // TODO
+            int validCount = 0;
+            for (int i = 0; i < n; i++) {
+                if (idata[i] != 0) {
+                    odata[validCount] = idata[i];
+                    validCount++;
+                }
+            }
             timer().endCpuTimer();
-            return -1;
+            return validCount;
         }
 
         /**
@@ -42,9 +64,25 @@ namespace StreamCompaction {
          */
         int compactWithScan(int n, int *odata, const int *idata) {
             timer().startCpuTimer();
-            // TODO
+            std::unique_ptr<int[]> mapped = std::make_unique<int[]>(n);
+            for (int i = 0; i < n; i++) {
+                if (idata[i] != 0) {
+                    mapped[i] = 1;
+                }
+            }
+            // At this point, mapped contains 0 and 1s
+            scan(n, odata, mapped.get(), false);
+            // At this point, odata contains {0, 0, 1, 1, 1, 2, 2, 2, 3, 4}
+            int result = n == 0 ? 0 : odata[n - 1] + mapped[n - 1];
+            for (int i = 0; i < n; i++) {
+                if (mapped[i] == 1) {
+                    int targetIndex = odata[i];
+                    odata[targetIndex] = idata[i];
+                }
+            }
+
             timer().endCpuTimer();
-            return -1;
+            return result;
         }
     }
 }
