@@ -133,9 +133,74 @@ namespace StreamCompaction {
          */
         int compact(int n, int *odata, const int *idata) {
             timer().startGpuTimer();
-            // TODO
+            if (n == 0) {
+                timer().endGpuTimer();
+                return 0;
+            }
+
+            int pow_of_two = ilog2ceil(n);
+            int n_new = ipow2(pow_of_two);
+
+            // Allocate buffers
+            int* dev_idata;
+            int* dev_bools;
+            int* dev_indices;
+            int* dev_odata;
+            cudaMalloc((void**)&dev_idata, n * sizeof(int));
+            cudaMalloc((void**)&dev_bools, n_new * sizeof(int));
+            cudaMalloc((void**)&dev_indices, n_new * sizeof(int));
+            cudaMalloc((void**)&dev_odata, n * sizeof(int));
+
+            // Copy input to CPU
+            cudaMemcpy(dev_idata, idata, n * sizeof(int), cudaMemcpyHostToDevice);
+
+            // Convert to bools (only first n elements is necessary because of the Memset)
+            map_to_boolean_gpu(n, dev_bools, dev_idata);
+
+            // Initialize indices with 0s so unset inputs are not counted in the scan
+            cudaMemset(dev_indices, 0, n_new * sizeof(int));
+            // Copy bools to indices since scan operates in place
+            cudaMemcpy(dev_indices, dev_bools, n * sizeof(int), cudaMemcpyDeviceToDevice);
+            // Scan to get indices
+            scan_gpu(n_new, dev_indices);
+
+            // Scatter first n elements
+            scatter_gpu(n, dev_odata, dev_idata, dev_bools, dev_indices);
+
+            // Copy output data to host
+            cudaMemcpy(odata, dev_odata, n * sizeof(int), cudaMemcpyDeviceToHost);
+            
+            // Copy the last index in the index buffer to host
+            int last_index = 0;
+            cudaMemcpy(&last_index, &dev_indices[n - 1], sizeof(int), cudaMemcpyDeviceToHost);
+            int last_value = idata[n - 1];
+
+            int count_remaining = last_index + (last_value != 0);
+
+            // Free buffers
+            cudaFree(dev_odata);
+            cudaFree(dev_indices);
+            cudaFree(dev_bools);
+            cudaFree(dev_idata);
             timer().endGpuTimer();
-            return -1;
+            return count_remaining;
+        }
+
+        void map_to_boolean_gpu(int n, int* dev_bools, const int* dev_idata) {
+            int numBlocks = 0;
+            int blockSize = 0;
+            pick_block_size(n, &numBlocks, &blockSize);
+
+            Common::kernMapToBoolean << <numBlocks, blockSize >> > (n, dev_bools, dev_idata);
+        }
+
+        void scatter_gpu(int n, int* dev_odata,
+            const int* dev_idata, const int* dev_bools, const int* dev_indices) {
+            int numBlocks = 0;
+            int blockSize = 0;
+            pick_block_size(n, &numBlocks, &blockSize);
+
+            Common::kernScatter << <numBlocks, blockSize >> > (n, dev_odata, dev_idata, dev_bools, dev_indices);
         }
     }
 }
