@@ -54,9 +54,9 @@ namespace StreamCompaction {
             *numBlocks = divup(n, *blockSize);
         }
 
-        __global__ void kernUpsweep(int n, int d, int* dev_data) {
+        __global__ void kernUpsweep(int data_length, int active_thread_count, int d, int* dev_data) {
             int index = blockDim.x * blockIdx.x + threadIdx.x;
-            if (index >= n) {
+            if (index >= active_thread_count) {
                 return;
             }
 
@@ -64,6 +64,10 @@ namespace StreamCompaction {
             int stride = 1 << (d + 1);
 
             int k = index * stride;
+
+            if (k + stride - 1 >= data_length) {
+                return;
+            }
 
             dev_data[k + stride - 1] = dev_data[k + half_stride - 1] + dev_data[k + stride - 1];
         }
@@ -76,15 +80,15 @@ namespace StreamCompaction {
                 int blockSize = 0;
                 pick_block_size(num_threads, &numBlocks, &blockSize);
 
-                kernUpsweep << <numBlocks, blockSize >> > (num_threads, d, dev_data);
+                kernUpsweep << <numBlocks, blockSize >> > (n, num_threads, d, dev_data);
 
                 num_threads /= 2;
             }
         }
 
-        __global__ void kernDownsweep(int n, int d, int* dev_data) {
+        __global__ void kernDownsweep(int data_length, int active_thread_count, int d, int* dev_data) {
             int index = blockDim.x * blockIdx.x + threadIdx.x;
-            if (index >= n) {
+            if (index >= active_thread_count) {
                 return;
             }
 
@@ -92,6 +96,10 @@ namespace StreamCompaction {
             int stride = 1 << (d + 1);
 
             int k = index * stride;
+
+            if (k + stride - 1 >= data_length) {
+                return;
+            }
 
             int t = dev_data[k + half_stride - 1];
             dev_data[k + half_stride - 1] = dev_data[k + stride - 1];
@@ -101,14 +109,14 @@ namespace StreamCompaction {
         void scan_gpu_downsweep(int n, int* dev_data) {
             cudaMemset(dev_data + (n - 1), 0, sizeof(int));
 
-            int d_max = ilog2(n) - 1;
+            int d_max = ilog2ceil(n) - 1;
             int num_threads = 1;
             for (int d = d_max; d >= 0; d--) {
                 int numBlocks = 0;
                 int blockSize = 0;
                 pick_block_size(num_threads, &numBlocks, &blockSize);
 
-                kernDownsweep << <numBlocks, blockSize >> > (num_threads, d, dev_data);
+                kernDownsweep << <numBlocks, blockSize >> > (n, num_threads, d, dev_data);
 
                 num_threads *= 2;
             }
