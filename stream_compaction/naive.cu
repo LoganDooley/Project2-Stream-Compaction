@@ -50,10 +50,6 @@ namespace StreamCompaction {
             *numBlocks = divup(n, *blockSize);
         }
 
-        __device__ int uipow2(unsigned int x) {
-            return 1 << x;
-        }
-
         __global__ void kernRightShift(int n, int* dev_data) {
             int index = blockDim.x * blockIdx.x + threadIdx.x;
             
