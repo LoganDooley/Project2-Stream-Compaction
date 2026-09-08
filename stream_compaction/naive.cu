@@ -6,6 +6,8 @@
 #include <cmath>
 #include <algorithm>
 
+#define NAIVE_USE_SHARED_MEMORY 1
+
 namespace StreamCompaction {
     namespace Naive {
         using StreamCompaction::Common::PerformanceTimer;
@@ -14,7 +16,6 @@ namespace StreamCompaction {
             static PerformanceTimer timer;
             return timer;
         }
-        // TODO: __global__
 
         /**
          * Performs prefix-sum (aka scan) on idata, storing the result into odata.
@@ -30,10 +31,14 @@ namespace StreamCompaction {
             // Copy input to CPU
             cudaMemcpy(dev_idata, idata, n * sizeof(int), cudaMemcpyHostToDevice);
 
-            int* dev_result = scan_gpu(n, dev_odata, dev_idata);
+#if NAIVE_USE_SHARED_MEMORY
+            recursive_scan_gpu(n, dev_odata, dev_idata);
+#else
+            scan_gpu(n, dev_odata, dev_idata);
+#endif
 
             // Copy output to CPU
-            cudaMemcpy(odata, dev_result, n * sizeof(int), cudaMemcpyDeviceToHost);
+            cudaMemcpy(odata, dev_odata, n * sizeof(int), cudaMemcpyDeviceToHost);
 
             // Free buffers
             cudaFree(dev_odata);
@@ -87,7 +92,7 @@ namespace StreamCompaction {
             }
         }
 
-        int* scan_gpu(int n, int* dev_odata, int* dev_idata) {
+        void scan_gpu(int n, int* dev_odata, int* dev_idata) {
             int numBlocks = 0;
             int blockSize = 0;
             pick_block_size(kernScan, n, &numBlocks, &blockSize);
@@ -107,7 +112,94 @@ namespace StreamCompaction {
                 offset *= 2;
             }
 
-            return dev_idata;
+            std::swap(dev_odata, dev_idata);
+        }
+
+        __global__ void kernScanBlock(int n, int* dev_odata, const int* dev_idata, int* dev_blockSums) {
+            extern __shared__ int temp[];
+
+            int localIndex = threadIdx.x;
+            int globalIndex = blockDim.x * blockIdx.x + threadIdx.x;
+
+            // Indices to fake double buffering
+            int pout = 0;
+            int pin = 1;
+
+            // Load data from global memory
+            temp[pout * blockDim.x + localIndex] = (globalIndex < n) ? dev_idata[globalIndex] : 0;
+            __syncthreads();
+
+            // Do sum in shared memory by "ping-pong"ing the two halves of the shared memory segment
+            for (int offset = 1; offset < blockDim.x; offset *= 2) {
+                // Ping pong by flipping the out and in flags
+                pout = 1 - pout;
+                pin = 1 - pin;
+
+                if (localIndex >= offset) {
+                    temp[pout * blockDim.x + localIndex] = temp[pin * blockDim.x + localIndex - offset] + temp[pin * blockDim.x + localIndex];
+                }
+                else {
+                    temp[pout * blockDim.x + localIndex] = temp[pin * blockDim.x + localIndex];
+                }
+                __syncthreads();
+            }
+
+            // Write back block sum 
+            if (dev_blockSums != nullptr && localIndex == blockDim.x - 1) {
+                dev_blockSums[blockIdx.x] = temp[pout * blockDim.x + localIndex];
+            }
+            __syncthreads();
+
+            // Convert to exclusive scan and write back to global memory
+            if (globalIndex < n) {
+                dev_odata[globalIndex] = (localIndex == 0) ? 0 : temp[pout * blockDim.x + localIndex - 1];
+            }
+        }
+
+        __global__ void kernIncrementByBlockSums(int n, int* dev_odata, const int* dev_blockSums) {
+            int index = blockDim.x * blockIdx.x + threadIdx.x;
+            if (index >= n) {
+                return;
+            }
+
+            // Only blocks 1+ should increment
+            if (blockIdx.x > 0) {
+                dev_odata[index] += dev_blockSums[blockIdx.x];
+            }
+        }
+
+        void recursive_scan_gpu(int n, int* dev_odata, const int* dev_idata) {
+            if (n <= 0) {
+                return;
+            }
+            
+            int numBlocks = 0;
+            int blockSize = 0;
+            pick_block_size(kernScanBlock, n, &numBlocks, &blockSize);
+
+            // 2 values per thread since it is double buffering via shared memory
+            size_t sharedMemorySize = 2 * blockSize * sizeof(int);
+
+            if (numBlocks <= 1) {
+                // Base case
+                kernScanBlock << <numBlocks, blockSize, sharedMemorySize >> > (n, dev_odata, dev_idata, nullptr);
+                return;
+            }
+
+            // Allocate buffer for block sums
+            int* dev_blockSums;
+            cudaMalloc((void**)&dev_blockSums, numBlocks * sizeof(int));
+
+            // Scan each block separately
+            kernScanBlock << <numBlocks, blockSize, sharedMemorySize >> > (n, dev_odata, dev_idata, dev_blockSums);
+
+            // Scan the block sums
+            recursive_scan_gpu(numBlocks, dev_blockSums, dev_blockSums);
+
+            // Increment sums by the block sums
+            kernIncrementByBlockSums << <numBlocks, blockSize >> > (n, dev_odata, dev_blockSums);
+
+            cudaFree(dev_blockSums);
         }
     }
 }
