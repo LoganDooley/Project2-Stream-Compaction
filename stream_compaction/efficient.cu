@@ -49,11 +49,6 @@ namespace StreamCompaction {
             return (dividend + divisor - 1) / divisor;
         }
 
-        __host__ void pick_block_size(int n, int* numBlocks, int* blockSize) {
-            *blockSize = 1024;
-            *numBlocks = divup(n, *blockSize);
-        }
-
         __global__ void kernUpsweep(int data_length, int active_thread_count, int d, int* dev_data) {
             int index = blockDim.x * blockIdx.x + threadIdx.x;
             if (index >= active_thread_count) {
@@ -78,7 +73,7 @@ namespace StreamCompaction {
             for (int d = 0; d <= d_max; d++) {
                 int numBlocks = 0;
                 int blockSize = 0;
-                pick_block_size(num_threads, &numBlocks, &blockSize);
+                pick_block_size(kernUpsweep, num_threads, &numBlocks, &blockSize);
 
                 kernUpsweep << <numBlocks, blockSize >> > (n, num_threads, d, dev_data);
 
@@ -114,7 +109,7 @@ namespace StreamCompaction {
             for (int d = d_max; d >= 0; d--) {
                 int numBlocks = 0;
                 int blockSize = 0;
-                pick_block_size(num_threads, &numBlocks, &blockSize);
+                pick_block_size(kernDownsweep, num_threads, &numBlocks, &blockSize);
 
                 kernDownsweep << <numBlocks, blockSize >> > (n, num_threads, d, dev_data);
 
@@ -189,7 +184,7 @@ namespace StreamCompaction {
         void map_to_boolean_gpu(int n, int* dev_bools, const int* dev_idata) {
             int numBlocks = 0;
             int blockSize = 0;
-            pick_block_size(n, &numBlocks, &blockSize);
+            pick_block_size(Common::kernMapToBoolean, n, &numBlocks, &blockSize);
 
             Common::kernMapToBoolean << <numBlocks, blockSize >> > (n, dev_bools, dev_idata);
         }
@@ -198,7 +193,7 @@ namespace StreamCompaction {
             const int* dev_idata, const int* dev_bools, const int* dev_indices) {
             int numBlocks = 0;
             int blockSize = 0;
-            pick_block_size(n, &numBlocks, &blockSize);
+            pick_block_size(Common::kernScatter, n, &numBlocks, &blockSize);
 
             Common::kernScatter << <numBlocks, blockSize >> > (n, dev_odata, dev_idata, dev_bools, dev_indices);
         }

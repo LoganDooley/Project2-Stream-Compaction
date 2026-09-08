@@ -45,11 +45,6 @@ namespace StreamCompaction {
             return (dividend + divisor - 1) / divisor;
         }
 
-        __host__ void pick_block_size(int n, int* numBlocks, int* blockSize) {
-            *blockSize = 1024;
-            *numBlocks = divup(n, *blockSize);
-        }
-
         __global__ void kernRightShift(int n, int* dev_data) {
             int index = blockDim.x * blockIdx.x + threadIdx.x;
             
@@ -75,20 +70,39 @@ namespace StreamCompaction {
             }
         }
 
+        __global__ void kernScanRightShifted(int n, int offset, int* dev_odata, const int* dev_idata) {
+            int k = blockDim.x * blockIdx.x + threadIdx.x;
+
+            if (k >= n) {
+                return;
+            }
+
+            if (k >= offset) {
+                int a = k - offset - 1 >= 0 ? dev_idata[k - offset - 1] : 0;
+                int b = k - 1 >= 0 ? dev_idata[k - 1] : 0;
+                dev_odata[k] = a + b;
+            }
+            else {
+                dev_odata[k] = k - 1 >= 1 ? dev_idata[k - 1] : 0;
+            }
+        }
+
         int* scan_gpu(int n, int* dev_odata, int* dev_idata) {
             int numBlocks = 0;
             int blockSize = 0;
-            pick_block_size(n, &numBlocks, &blockSize);
-
-            // Right shift the input to do an exclusive rather than inclusive scan
-            kernRightShift << <numBlocks, blockSize >> > (n, dev_idata);
+            pick_block_size(kernScan, n, &numBlocks, &blockSize);
 
             // Perform double buffered scan algorithm
             int d_max = ilog2ceil(n);
 
             int offset = 1;
             for (int d = 1; d <= d_max; d++) {
-                kernScan << <numBlocks, blockSize >> > (n, offset, dev_odata, dev_idata);
+                if (d == 1) {
+                    kernScanRightShifted << <numBlocks, blockSize >> > (n, offset, dev_odata, dev_idata);
+                }
+                else {
+                    kernScan << <numBlocks, blockSize >> > (n, offset, dev_odata, dev_idata);
+                }
                 std::swap(dev_odata, dev_idata);
                 offset *= 2;
             }
