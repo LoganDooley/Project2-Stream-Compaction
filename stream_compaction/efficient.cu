@@ -19,19 +19,27 @@ namespace StreamCompaction {
          */
         void scan(int n, int *odata, const int *idata) {
             timer().startGpuTimer();
-            int pow_of_two = ilog2ceil(n);
-            int n_new = ipow2(pow_of_two);
+            int powOfTwo = ilog2ceil(n);
+            int nNew = ipow2(powOfTwo);
             // Allocate buffer
             int* dev_data;
-            cudaMalloc((void**)&dev_data, n_new * sizeof(int));
+            cudaMalloc((void**)&dev_data, nNew * sizeof(int));
 
             // Initialize with 0s
-            cudaMemset(dev_data, 0, n_new * sizeof(int));
+            cudaMemset(dev_data, 0, nNew * sizeof(int));
 
             // Copy input to CPU
             cudaMemcpy(dev_data, idata, n * sizeof(int), cudaMemcpyHostToDevice);
 
+#if EFFICIENT_USE_SHARED_MEMORY
+            Common::scanRecursive(kernScanBlock,
+                Common::pickBlockSizePowOfTwo<decltype(kernScanBlock)>,
+                sizeof(int),
+                nNew,
+                dev_data);
+#else
             scanGpu(n_new, dev_data);
+#endif
 
             // Copy output to CPU
             cudaMemcpy(odata, dev_data, n * sizeof(int), cudaMemcpyDeviceToHost);
@@ -198,6 +206,58 @@ namespace StreamCompaction {
             Common::pickBlockSize(Common::kernScatter, n, &numBlocks, &blockSize);
 
             Common::kernScatter << <numBlocks, blockSize >> > (n, dev_odata, dev_idata, dev_bools, dev_indices);
+        }
+
+        __global__ void kernScanBlock(int n, int* dev_data, int* dev_blockSums) {
+            // TODO: Consider optimizing this by launching a kernel with half the block size
+            // that way the first iteration of the upsweep isn't wasting half the threads
+            extern __shared__ int temp[];
+
+            int localIndex = threadIdx.x;
+            int globalIndex = blockDim.x * blockIdx.x + threadIdx.x;
+
+            // Load into shared memory
+            temp[localIndex] = (globalIndex < n) ? dev_data[globalIndex] : 0;
+            __syncthreads();
+
+            // Upsweep
+            for (int stride = 1; stride < blockDim.x; stride *= 2) {
+                // Get right-most index of this given stride
+                int index = (localIndex + 1) * stride * 2 - 1;
+                if (index < blockDim.x) {
+                    temp[index] += temp[index - stride];
+                }
+                __syncthreads();
+            }
+
+            if (localIndex == 0) {
+                // Save block sum if needed and replace with 0 before downsweep
+                if (dev_blockSums != nullptr) {
+                    dev_blockSums[blockIdx.x] = temp[blockDim.x - 1];
+                }
+                temp[blockDim.x - 1] = 0;
+            }
+            __syncthreads();
+
+            // Downsweep
+            for (int stride = blockDim.x / 2; stride >= 1; stride /= 2) {
+                // Get right most index of this given stride
+                int index = (localIndex + 1) * stride * 2 - 1;
+                if (index < blockDim.x) {
+                    int leftChild = temp[index - stride];
+
+                    // Copy right into left
+                    temp[index - stride] = temp[index];
+                    // Add left to the right
+                    temp[index] += leftChild;
+                }
+                __syncthreads();
+            }
+
+            // Write back to global memory
+            if (globalIndex < n) {
+                dev_data[globalIndex] = temp[localIndex];
+            }
         }
     }
 }
