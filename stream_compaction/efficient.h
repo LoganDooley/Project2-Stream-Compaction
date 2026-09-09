@@ -8,17 +8,17 @@ namespace StreamCompaction {
 
         void scan(int n, int *odata, const int *idata);
 
-        void scan_gpu(int n, int* dev_data);
+        void scanGpu(int n, int* dev_data);
 
-        void scan_gpu_upsweep(int n, int* dev_data);
+        void scanGpuUpsweep(int n, int* dev_data);
 
-        void scan_gpu_downsweep(int n, int* dev_data);
+        void scanGpuDownsweep(int n, int* dev_data);
 
         int compact(int n, int *odata, const int *idata);
 
-        void map_to_boolean_gpu(int n, int* dev_bools, const int* dev_idata);
+        void mapToBooleanGpu(int n, int* dev_bools, const int* dev_idata);
 
-        void scatter_gpu(int n, int* dev_odata,
+        void scatterGpu(int n, int* dev_odata,
             const int* dev_idata, const int* dev_bools, const int* dev_indices);
     }
 }

@@ -8,8 +8,8 @@ namespace StreamCompaction {
 
         void scan(int n, int *odata, const int *idata);
 
-        void scan_gpu(int n, int* dev_odata, int* dev_idata);
-    
-        void recursive_scan_gpu(int n, int* dev_odata, const int* dev_idata);
+        void scanGpu(int n, int* dev_odata, int* dev_idata);
+
+        __global__ void kernScanBlock(int n, int* dev_data, int* dev_blockSums);
     }
 }

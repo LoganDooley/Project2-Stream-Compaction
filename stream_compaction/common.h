@@ -34,25 +34,61 @@ inline int ipow2(unsigned int x) {
     return 1 << x;
 }
 
-template <typename KernelFunction>
-void pick_block_size(KernelFunction kernel, int n, int* num_blocks, int* block_size) {
-    int min_grid_size = 0;
-    int best_block_size = 0;
-
-    cudaOccupancyMaxPotentialBlockSize(&min_grid_size, &best_block_size, kernel, 0, 0);
-
-    // If our n is smaller than what cuda determines is the recommended size,
-    // find a multiple of 32 that fits
-    if (n < best_block_size) {
-        best_block_size = std::max(32, (n / 32) * 32);
-    }
-
-    *block_size = best_block_size;
-    *num_blocks = (n + *block_size - 1) / *block_size;
-}
-
 namespace StreamCompaction {
     namespace Common {
+        __global__ void kernIncrementByBlockSums(int n, int* dev_odata, const int* dev_blockSums);
+
+        template <typename KernelFunction>
+        void pickBlockSize(KernelFunction kernel, int n, int* num_blocks, int* block_size) {
+            int min_grid_size = 0;
+            int best_block_size = 0;
+
+            cudaOccupancyMaxPotentialBlockSize(&min_grid_size, &best_block_size, kernel, 0, 0);
+
+            // If our n is smaller than what cuda determines is the recommended size,
+            // find a multiple of 32 that fits
+            if (n < best_block_size) {
+                best_block_size = std::max(32, (n / 32) * 32);
+            }
+
+            *block_size = best_block_size;
+            *num_blocks = (n + *block_size - 1) / *block_size;
+        }
+
+        template <typename KernelFunc, typename BlockSizeFunc>
+        void scanRecursive(KernelFunc kernScanBlock, BlockSizeFunc blockSizeFunc, int sharedMemorySizePerThread, int n, int* dev_data) {
+            if (n <= 0) {
+                return;
+            }
+
+            int numBlocks = 0;
+            int blockSize = 0;
+            blockSizeFunc(kernScanBlock, n, &numBlocks, &blockSize);
+
+            size_t sharedMemorySize = sharedMemorySizePerThread * blockSize;
+
+            if (numBlocks <= 1) {
+                // Base case
+                kernScanBlock << <numBlocks, blockSize, sharedMemorySize >> > (n, dev_data, nullptr);
+                return;
+            }
+
+            // Allocate buffer for block sums
+            int* dev_blockSums;
+            cudaMalloc((void**)&dev_blockSums, numBlocks * sizeof(int));
+
+            // Scan each block separately
+            kernScanBlock << <numBlocks, blockSize, sharedMemorySize >> > (n, dev_data, dev_blockSums);
+
+            // Scan the block sums
+            scanRecursive(kernScanBlock, blockSizeFunc, sharedMemorySizePerThread, numBlocks, dev_blockSums);
+
+            // Increment sums by the block sums
+            kernIncrementByBlockSums << <numBlocks, blockSize >> > (n, dev_data, dev_blockSums);
+
+            cudaFree(dev_blockSums);
+        }
+
         __global__ void kernMapToBoolean(int n, int *bools, const int *idata);
 
         __global__ void kernScatter(int n, int *odata,

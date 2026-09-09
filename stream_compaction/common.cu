@@ -17,6 +17,17 @@ void checkCUDAErrorFn(const char *msg, const char *file, int line) {
 
 namespace StreamCompaction {
     namespace Common {
+        __global__ void kernIncrementByBlockSums(int n, int* dev_odata, const int* dev_blockSums) {
+            int index = blockDim.x * blockIdx.x + threadIdx.x;
+            if (index >= n) {
+                return;
+            }
+
+            // Only blocks 1+ should increment
+            if (blockIdx.x > 0) {
+                dev_odata[index] += dev_blockSums[blockIdx.x];
+            }
+        }
 
         /**
          * Maps an array to an array of 0s and 1s for stream compaction. Elements
