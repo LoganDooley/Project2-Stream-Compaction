@@ -39,20 +39,52 @@ namespace StreamCompaction {
         __global__ void kernIncrementByBlockSums(int n, int* dev_odata, const int* dev_blockSums);
 
         template <typename KernelFunction>
-        void pickBlockSize(KernelFunction kernel, int n, int* num_blocks, int* block_size) {
-            int min_grid_size = 0;
-            int best_block_size = 0;
+        void pickBlockSize(KernelFunction kernel, int n, int* numBlocks, int* blockSize) {
+            int minGridSize = 0;
+            int bestBlockSize = 0;
 
-            cudaOccupancyMaxPotentialBlockSize(&min_grid_size, &best_block_size, kernel, 0, 0);
+            // Find what CUDA would recommend
+            cudaOccupancyMaxPotentialBlockSize(&minGridSize, &bestBlockSize, kernel, 0, 0);
 
             // If our n is smaller than what cuda determines is the recommended size,
             // find a multiple of 32 that fits
-            if (n < best_block_size) {
-                best_block_size = std::max(32, (n / 32) * 32);
+            if (n < bestBlockSize) {
+                bestBlockSize = std::max(32, (n / 32) * 32);
             }
 
-            *block_size = best_block_size;
-            *num_blocks = (n + *block_size - 1) / *block_size;
+            *blockSize = bestBlockSize;
+            *numBlocks = (n + *blockSize - 1) / *blockSize;
+        }
+
+        template <typename KernelFunction>
+        void pickBlockSizePowOfTwo(KernelFunction kernel, int n, int* numBlocks, int* blockSize) {
+            int minGridSize = 0;
+            int bestBlockSize = 0;
+
+            // Find what CUDA would recommend
+            cudaOccupancyMaxPotentialBlockSize(&minGridSize, &bestBlockSize, kernel, 0, 0);
+
+            // If the best block size isn't a power of 2, round down to the nearest power of 2
+            if ((bestBlockSize & (bestBlockSize - 1)) != 0) {
+                int nextSmallestPowerOfTwo = 1;
+                while (nextSmallestPowerOfTwo * 2 <= bestBlockSize) {
+                    nextSmallestPowerOfTwo *= 2;
+                }
+                bestBlockSize = nextSmallestPowerOfTwo;
+            }
+
+            // If our n is smaller than the recommended block size, 
+            // find a power of 2 that fits
+            if (n < bestBlockSize) {
+                int fallback = 32; // Start from minimum warp size
+                while (fallback < n && fallback < bestBlockSize) {
+                    fallback *= 2;
+                }
+                bestBlockSize = fallback;
+            }
+
+            *blockSize = bestBlockSize;
+            *numBlocks = (n + *blockSize - 1) / *blockSize;
         }
 
         template <typename KernelFunc, typename BlockSizeFunc>
