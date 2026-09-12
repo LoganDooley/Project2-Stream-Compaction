@@ -6,6 +6,7 @@
 #include "efficient.h"
 
 #define EFFICIENT_USE_SHARED_MEMORY 1
+#define EFFICIENT_USE_COMPACTED_INDICES 1
 
 namespace StreamCompaction {
     namespace Efficient {
@@ -36,7 +37,7 @@ namespace StreamCompaction {
 #if EFFICIENT_USE_SHARED_MEMORY
             Common::scanRecursive(kernScanBlock,
                 Common::pickBlockSizePowOfTwo<decltype(kernScanBlock)>,
-                sizeof(int),
+                getSharedMemorySize,
                 nNew,
                 dev_data);
 #else
@@ -232,11 +233,21 @@ namespace StreamCompaction {
 
             // Upsweep
             for (int stride = 1; stride < blockDim.x; stride *= 2) {
+#if EFFICIENT_USE_COMPACTED_INDICES
+                int active_threads = blockDim.x / (stride * 2);
+                if(localIndex < active_threads) {
+                    // Get right-most index of this given stride
+                    int rightIndex = (localIndex + 1) * stride * 2 - 1;
+					int leftIndex = rightIndex - stride;
+                    temp[rightIndex] += temp[leftIndex];
+				}
+#else
                 // Get right-most index of this given stride
                 int index = (localIndex + 1) * stride * 2 - 1;
                 if (index < blockDim.x) {
                     temp[index] += temp[index - stride];
                 }
+#endif
                 block.sync();
             }
 
@@ -251,6 +262,20 @@ namespace StreamCompaction {
 
             // Downsweep
             for (int stride = blockDim.x / 2; stride >= 1; stride /= 2) {
+#if EFFICIENT_USE_COMPACTED_INDICES
+				int activeThreads = blockDim.x / (stride * 2);
+                if(localIndex < activeThreads) {
+                    // Get right-most index of this given stride
+                    int rightIndex = (localIndex + 1) * stride * 2 - 1;
+                    int leftIndex = rightIndex - stride;
+
+                    int leftChild = temp[leftIndex];
+
+                    // Swap and add
+                    temp[leftIndex] = temp[rightIndex];
+                    temp[rightIndex] += leftChild;
+				}
+#else
                 // Get right most index of this given stride
                 int index = (localIndex + 1) * stride * 2 - 1;
                 if (index < blockDim.x) {
@@ -261,6 +286,7 @@ namespace StreamCompaction {
                     // Add left to the right
                     temp[index] += leftChild;
                 }
+#endif
                 block.sync();
             }
 
@@ -268,6 +294,11 @@ namespace StreamCompaction {
             if (globalIndex < n) {
                 dev_data[globalIndex] = temp[localIndex];
             }
+        }
+
+        __host__ int getSharedMemorySize(int blockSize)
+        {
+            return blockSize * sizeof(int);
         }
     }
 }

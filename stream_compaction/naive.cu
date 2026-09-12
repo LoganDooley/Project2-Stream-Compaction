@@ -38,7 +38,7 @@ namespace StreamCompaction {
 #if NAIVE_USE_SHARED_MEMORY
             Common::scanRecursive(kernScanBlock, 
                 Common::pickBlockSize<decltype(kernScanBlock)>,
-                2 * sizeof(int), 
+                getSharedMemorySize, 
                 n, 
                 dev_idata);
             output = dev_idata;
@@ -173,6 +173,11 @@ namespace StreamCompaction {
             if (globalIndex < n) {
                 dev_data[globalIndex] = (localIndex == 0) ? 0 : temp[pout * blockDim.x + localIndex - 1];
             }
+        }
+
+        __host__ int getSharedMemorySize(int blockSize)
+        {
+            return blockSize * sizeof(int) * 2;
         }
     }
 }

@@ -83,12 +83,16 @@ namespace StreamCompaction {
                 bestBlockSize = fallback;
             }
 
+            if (bestBlockSize > 256) {
+                bestBlockSize = 256;
+            }
+
             *blockSize = bestBlockSize;
             *numBlocks = (n + *blockSize - 1) / *blockSize;
         }
 
-        template <typename KernelFunc, typename BlockSizeFunc>
-        void scanRecursive(KernelFunc kernScanBlock, BlockSizeFunc blockSizeFunc, int sharedMemorySizePerThread, int n, int* dev_data) {
+        template <typename KernelFunc, typename BlockSizeFunc, typename SharedMemorySizeFunc>
+        void scanRecursive(KernelFunc kernScanBlock, BlockSizeFunc blockSizeFunc, SharedMemorySizeFunc sharedMemorySizeFunc, int n, int* dev_data) {
             if (n <= 0) {
                 return;
             }
@@ -97,7 +101,7 @@ namespace StreamCompaction {
             int blockSize = 0;
             blockSizeFunc(kernScanBlock, n, &numBlocks, &blockSize);
 
-            size_t sharedMemorySize = sharedMemorySizePerThread * blockSize;
+            size_t sharedMemorySize = sharedMemorySizeFunc(blockSize);
 
             if (numBlocks <= 1) {
                 // Base case
@@ -113,7 +117,7 @@ namespace StreamCompaction {
             kernScanBlock << <numBlocks, blockSize, sharedMemorySize >> > (n, dev_data, dev_blockSums);
 
             // Scan the block sums
-            scanRecursive(kernScanBlock, blockSizeFunc, sharedMemorySizePerThread, numBlocks, dev_blockSums);
+            scanRecursive(kernScanBlock, blockSizeFunc, sharedMemorySizeFunc, numBlocks, dev_blockSums);
 
             // Increment sums by the block sums
             kernIncrementByBlockSums << <numBlocks, blockSize >> > (n, dev_data, dev_blockSums);

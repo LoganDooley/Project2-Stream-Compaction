@@ -22,5 +22,7 @@ namespace StreamCompaction {
             const int* dev_idata, const int* dev_bools, const int* dev_indices);
 
         __global__ void kernScanBlock(int n, int* dev_data, int* dev_blockSums);
+
+        __host__ int getSharedMemorySize(int blockSize);
     }
 }
