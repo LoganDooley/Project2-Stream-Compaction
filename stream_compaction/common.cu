@@ -17,15 +17,17 @@ void checkCUDAErrorFn(const char *msg, const char *file, int line) {
 
 namespace StreamCompaction {
     namespace Common {
-        __global__ void kernIncrementByBlockSums(int n, int* dev_odata, const int* dev_blockSums) {
+        __global__ void kernIncrementByBlockSums(int chunkSize, int n, int* dev_odata, const int* dev_blockSums) {
             int index = blockDim.x * blockIdx.x + threadIdx.x;
             if (index >= n) {
                 return;
             }
 
-            // Only blocks 1+ should increment
-            if (blockIdx.x > 0) {
-                dev_odata[index] += dev_blockSums[blockIdx.x];
+            int chunkIndex = index / chunkSize;
+
+            // Only chunks 1+ should increment
+            if (chunkIndex > 0) {
+                dev_odata[index] += dev_blockSums[chunkIndex];
             }
         }
 

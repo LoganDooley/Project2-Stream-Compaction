@@ -23,14 +23,21 @@ namespace StreamCompaction {
          * Performs prefix-sum (aka scan) on idata, storing the result into odata.
          */
         void scan(int n, int *odata, const int *idata) {
+            if (n <= 0) {
+                return;
+			}
+
             // Allocate buffers
             int* dev_idata;
             int* dev_odata;
             cudaMalloc((void**)&dev_idata, n * sizeof(int));
+            checkCUDAError("cudaMalloc dev_idata failed!");
             cudaMalloc((void**)&dev_odata, n * sizeof(int));
+			checkCUDAError("cudaMalloc dev_odata failed!");
 
             // Copy input to CPU
             cudaMemcpy(dev_idata, idata, n * sizeof(int), cudaMemcpyHostToDevice);
+			checkCUDAError("cudaMemcpy idata to dev_idata failed!");
 
             int* output = 0;
 
@@ -39,6 +46,7 @@ namespace StreamCompaction {
             Common::scanRecursive(kernScanBlock, 
                 Common::pickBlockSize<decltype(kernScanBlock)>,
                 getSharedMemorySize, 
+                1,
                 n, 
                 dev_idata);
             output = dev_idata;
@@ -50,10 +58,13 @@ namespace StreamCompaction {
 
             // Copy output to CPU
             cudaMemcpy(odata, output, n * sizeof(int), cudaMemcpyDeviceToHost);
+			checkCUDAError("cudaMemcpy dev_odata to odata failed!");
 
             // Free buffers
             cudaFree(dev_odata);
+			checkCUDAError("cudaFree dev_odata failed!");
             cudaFree(dev_idata);
+			checkCUDAError("cudaFree dev_idata failed!");
         }
 
         __host__ __device__ int divup(int dividend, int divisor) {
@@ -125,7 +136,7 @@ namespace StreamCompaction {
             std::swap(dev_odata, dev_idata);
         }
 
-        __global__ void kernScanBlock(int n, int* dev_data, int* dev_blockSums) {
+        __global__ void kernScanBlock(int chunkSize, int n, int* dev_data, int* dev_blockSums) {
             extern __shared__ int temp[];
 
             __shared__ cuda::barrier<cuda::thread_scope_block> bar;

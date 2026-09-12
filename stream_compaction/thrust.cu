@@ -18,6 +18,10 @@ namespace StreamCompaction {
          * Performs prefix-sum (aka scan) on idata, storing the result into odata.
          */
         void scan(int n, int *odata, const int *idata) {
+            if (n <= 0) {
+                return;
+            }
+
             // Allocate device vectors
             thrust::device_vector<int> dev_idata(n);
             thrust::device_vector<int> dev_odata(n);

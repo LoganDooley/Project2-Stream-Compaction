@@ -10,7 +10,7 @@ namespace StreamCompaction {
 
         void scanGpu(int n, int* dev_odata, int* dev_idata);
 
-        __global__ void kernScanBlock(int n, int* dev_data, int* dev_blockSums);
+        __global__ void kernScanBlock(int chunkSize, int n, int* dev_data, int* dev_blockSums);
 
         __host__ int getSharedMemorySize(int blockSize);
     }

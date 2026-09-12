@@ -34,9 +34,13 @@ inline int ipow2(unsigned int x) {
     return 1 << x;
 }
 
+inline int divup(int a, int b) {
+    return (a + b - 1) / b;
+}
+
 namespace StreamCompaction {
     namespace Common {
-        __global__ void kernIncrementByBlockSums(int n, int* dev_odata, const int* dev_blockSums);
+        __global__ void kernIncrementByBlockSums(int chunkSize, int n, int* dev_odata, const int* dev_blockSums);
 
         template <typename KernelFunction>
         void pickBlockSize(KernelFunction kernel, int n, int* numBlocks, int* blockSize) {
@@ -45,6 +49,7 @@ namespace StreamCompaction {
 
             // Find what CUDA would recommend
             cudaOccupancyMaxPotentialBlockSize(&minGridSize, &bestBlockSize, kernel, 0, 0);
+			checkCUDAError("cudaOccupancyMaxPotentialBlockSize failed");
 
             // If our n is smaller than what cuda determines is the recommended size,
             // find a multiple of 32 that fits
@@ -63,6 +68,7 @@ namespace StreamCompaction {
 
             // Find what CUDA would recommend
             cudaOccupancyMaxPotentialBlockSize(&minGridSize, &bestBlockSize, kernel, 0, 0);
+			checkCUDAError("cudaOccupancyMaxPotentialBlockSize failed");
 
             // If the best block size isn't a power of 2, round down to the nearest power of 2
             if ((bestBlockSize & (bestBlockSize - 1)) != 0) {
@@ -83,46 +89,49 @@ namespace StreamCompaction {
                 bestBlockSize = fallback;
             }
 
-            if (bestBlockSize > 256) {
-                bestBlockSize = 256;
-            }
-
             *blockSize = bestBlockSize;
             *numBlocks = (n + *blockSize - 1) / *blockSize;
         }
 
-        template <typename KernelFunc, typename BlockSizeFunc, typename SharedMemorySizeFunc>
-        void scanRecursive(KernelFunc kernScanBlock, BlockSizeFunc blockSizeFunc, SharedMemorySizeFunc sharedMemorySizeFunc, int n, int* dev_data) {
+        template <typename KernelFunc, typename ChunkSizeFunc, typename SharedMemorySizeFunc>
+        void scanRecursive(KernelFunc kernScanBlock, ChunkSizeFunc chunkSizeFunc, SharedMemorySizeFunc sharedMemorySizeFunc, int elementsPerThread, int n, int* dev_data) {
             if (n <= 0) {
                 return;
             }
 
-            int numBlocks = 0;
-            int blockSize = 0;
-            blockSizeFunc(kernScanBlock, n, &numBlocks, &blockSize);
+            int numChunks = 0;
+            int chunkSize = 0;
+            chunkSizeFunc(kernScanBlock, n, &numChunks, &chunkSize);
 
-            size_t sharedMemorySize = sharedMemorySizeFunc(blockSize);
+			int threadsPerChunk = divup(chunkSize, elementsPerThread);
 
-            if (numBlocks <= 1) {
+            size_t sharedMemorySize = sharedMemorySizeFunc(chunkSize);
+
+            if (numChunks <= 1) {
                 // Base case
-                kernScanBlock << <numBlocks, blockSize, sharedMemorySize >> > (n, dev_data, nullptr);
+                kernScanBlock << <numChunks, threadsPerChunk, sharedMemorySize >> > (chunkSize, n, dev_data, nullptr);
+				checkCUDAError("kernScanBlock failed");
                 return;
             }
 
-            // Allocate buffer for block sums
-            int* dev_blockSums;
-            cudaMalloc((void**)&dev_blockSums, numBlocks * sizeof(int));
+            // Allocate buffer for chunk sums
+            int* dev_chunkSums;
+            cudaMalloc((void**)&dev_chunkSums, numChunks * sizeof(int));
+			checkCUDAError("cudaMalloc dev_chunkSums failed");
 
-            // Scan each block separately
-            kernScanBlock << <numBlocks, blockSize, sharedMemorySize >> > (n, dev_data, dev_blockSums);
+            // Scan each chunk separately
+            kernScanBlock << <numChunks, threadsPerChunk, sharedMemorySize >> > (chunkSize, n, dev_data, dev_chunkSums);
+			checkCUDAError("kernScanBlock failed");
 
-            // Scan the block sums
-            scanRecursive(kernScanBlock, blockSizeFunc, sharedMemorySizeFunc, numBlocks, dev_blockSums);
+            // Scan the chunk sums
+            scanRecursive(kernScanBlock, chunkSizeFunc, sharedMemorySizeFunc, elementsPerThread, numChunks, dev_chunkSums);
 
-            // Increment sums by the block sums
-            kernIncrementByBlockSums << <numBlocks, blockSize >> > (n, dev_data, dev_blockSums);
+            // Increment sums by the chunk sums
+            kernIncrementByBlockSums << <numChunks, chunkSize >> > (chunkSize, n, dev_data, dev_chunkSums);
+			checkCUDAError("kernIncrementByBlockSums failed");
 
-            cudaFree(dev_blockSums);
+            cudaFree(dev_chunkSums);
+			checkCUDAError("cudaFree dev_chunkSums failed");
         }
 
         __global__ void kernMapToBoolean(int n, int *bools, const int *idata);
