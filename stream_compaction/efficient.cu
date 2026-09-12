@@ -1,5 +1,7 @@
 #include <cuda.h>
 #include <cuda_runtime.h>
+#include <cuda/barrier>
+#include <cooperative_groups.h>
 #include "common.h"
 #include "efficient.h"
 
@@ -18,7 +20,6 @@ namespace StreamCompaction {
          * Performs prefix-sum (aka scan) on idata, storing the result into odata.
          */
         void scan(int n, int *odata, const int *idata) {
-            timer().startGpuTimer();
             int powOfTwo = ilog2ceil(n);
             int nNew = ipow2(powOfTwo);
             // Allocate buffer
@@ -31,6 +32,7 @@ namespace StreamCompaction {
             // Copy input to CPU
             cudaMemcpy(dev_data, idata, n * sizeof(int), cudaMemcpyHostToDevice);
 
+            timer().startGpuTimer();
 #if EFFICIENT_USE_SHARED_MEMORY
             Common::scanRecursive(kernScanBlock,
                 Common::pickBlockSizePowOfTwo<decltype(kernScanBlock)>,
@@ -40,13 +42,13 @@ namespace StreamCompaction {
 #else
             scanGpu(n_new, dev_data);
 #endif
+            timer().endGpuTimer();
 
             // Copy output to CPU
             cudaMemcpy(odata, dev_data, n * sizeof(int), cudaMemcpyDeviceToHost);
 
             // Free buffers
             cudaFree(dev_data);
-            timer().endGpuTimer();
         }
 
         void scanGpu(int n, int* dev_data)
@@ -137,9 +139,7 @@ namespace StreamCompaction {
          * @returns      The number of elements remaining after compaction.
          */
         int compact(int n, int *odata, const int *idata) {
-            timer().startGpuTimer();
             if (n == 0) {
-                timer().endGpuTimer();
                 return 0;
             }
 
@@ -159,6 +159,7 @@ namespace StreamCompaction {
             // Copy input to CPU
             cudaMemcpy(dev_idata, idata, n * sizeof(int), cudaMemcpyHostToDevice);
 
+            timer().startGpuTimer();
             // Convert to bools (only first n elements is necessary because of the Memset)
             mapToBooleanGpu(n, dev_bools, dev_idata);
 
@@ -171,6 +172,7 @@ namespace StreamCompaction {
 
             // Scatter first n elements
             scatterGpu(n, dev_odata, dev_idata, dev_bools, dev_indices);
+            timer().endGpuTimer();
 
             // Copy output data to host
             cudaMemcpy(odata, dev_odata, n * sizeof(int), cudaMemcpyDeviceToHost);
@@ -187,7 +189,6 @@ namespace StreamCompaction {
             cudaFree(dev_indices);
             cudaFree(dev_bools);
             cudaFree(dev_idata);
-            timer().endGpuTimer();
             return countRemaining;
         }
 
@@ -213,12 +214,21 @@ namespace StreamCompaction {
             // that way the first iteration of the upsweep isn't wasting half the threads
             extern __shared__ int temp[];
 
+            __shared__ cuda::barrier<cuda::thread_scope_block> bar;
+            auto block = cooperative_groups::this_thread_block();
+
+            if (block.thread_rank() == 0)
+            {
+                init(&bar, block.size());
+            }
+            block.sync();
+
             int localIndex = threadIdx.x;
             int globalIndex = blockDim.x * blockIdx.x + threadIdx.x;
 
             // Load into shared memory
             temp[localIndex] = (globalIndex < n) ? dev_data[globalIndex] : 0;
-            __syncthreads();
+            block.sync();
 
             // Upsweep
             for (int stride = 1; stride < blockDim.x; stride *= 2) {
@@ -227,7 +237,7 @@ namespace StreamCompaction {
                 if (index < blockDim.x) {
                     temp[index] += temp[index - stride];
                 }
-                __syncthreads();
+                block.sync();
             }
 
             if (localIndex == 0) {
@@ -237,7 +247,7 @@ namespace StreamCompaction {
                 }
                 temp[blockDim.x - 1] = 0;
             }
-            __syncthreads();
+            block.sync();
 
             // Downsweep
             for (int stride = blockDim.x / 2; stride >= 1; stride /= 2) {
@@ -251,7 +261,7 @@ namespace StreamCompaction {
                     // Add left to the right
                     temp[index] += leftChild;
                 }
-                __syncthreads();
+                block.sync();
             }
 
             // Write back to global memory

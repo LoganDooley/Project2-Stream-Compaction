@@ -1,5 +1,7 @@
 #include <cuda.h>
 #include <cuda_runtime.h>
+#include <cuda/barrier>
+#include <cooperative_groups.h>
 #include "common.h"
 #include "naive.h"
 
@@ -21,7 +23,6 @@ namespace StreamCompaction {
          * Performs prefix-sum (aka scan) on idata, storing the result into odata.
          */
         void scan(int n, int *odata, const int *idata) {
-            timer().startGpuTimer();
             // Allocate buffers
             int* dev_idata;
             int* dev_odata;
@@ -31,24 +32,28 @@ namespace StreamCompaction {
             // Copy input to CPU
             cudaMemcpy(dev_idata, idata, n * sizeof(int), cudaMemcpyHostToDevice);
 
+            int* output = 0;
+
+            timer().startGpuTimer();
 #if NAIVE_USE_SHARED_MEMORY
             Common::scanRecursive(kernScanBlock, 
                 Common::pickBlockSize<decltype(kernScanBlock)>,
                 2 * sizeof(int), 
                 n, 
                 dev_idata);
-            // Copy output to CPU
-            cudaMemcpy(odata, dev_idata, n * sizeof(int), cudaMemcpyDeviceToHost);
+            output = dev_idata;
 #else
             scanGpu(n, dev_odata, dev_idata);
-            // Copy output to CPU
-            cudaMemcpy(odata, dev_odata, n * sizeof(int), cudaMemcpyDeviceToHost);
+            output = dev_odata;
 #endif
+            timer().endGpuTimer();
+
+            // Copy output to CPU
+            cudaMemcpy(odata, output, n * sizeof(int), cudaMemcpyDeviceToHost);
 
             // Free buffers
             cudaFree(dev_odata);
             cudaFree(dev_idata);
-            timer().endGpuTimer();
         }
 
         __host__ __device__ int divup(int dividend, int divisor) {
@@ -123,6 +128,15 @@ namespace StreamCompaction {
         __global__ void kernScanBlock(int n, int* dev_data, int* dev_blockSums) {
             extern __shared__ int temp[];
 
+            __shared__ cuda::barrier<cuda::thread_scope_block> bar;
+            auto block = cooperative_groups::this_thread_block();
+
+            if (block.thread_rank() == 0)
+            {
+                init(&bar, block.size());
+            }
+            block.sync();
+
             int localIndex = threadIdx.x;
             int globalIndex = blockDim.x * blockIdx.x + threadIdx.x;
 
@@ -132,7 +146,7 @@ namespace StreamCompaction {
 
             // Load data from global memory
             temp[pout * blockDim.x + localIndex] = (globalIndex < n) ? dev_data[globalIndex] : 0;
-            __syncthreads();
+            block.sync();
 
             // Do sum in shared memory by "ping-pong"ing the two halves of the shared memory segment
             for (int offset = 1; offset < blockDim.x; offset *= 2) {
@@ -146,14 +160,14 @@ namespace StreamCompaction {
                 else {
                     temp[pout * blockDim.x + localIndex] = temp[pin * blockDim.x + localIndex];
                 }
-                __syncthreads();
+                block.sync();
             }
 
             // Write back block sum 
             if (dev_blockSums != nullptr && localIndex == blockDim.x - 1) {
                 dev_blockSums[blockIdx.x] = temp[pout * blockDim.x + localIndex];
             }
-            __syncthreads();
+            block.sync();
 
             // Convert to exclusive scan and write back to global memory
             if (globalIndex < n) {
