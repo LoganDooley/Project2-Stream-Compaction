@@ -8,7 +8,7 @@
 #include <cmath>
 #include <algorithm>
 
-#define NAIVE_USE_SHARED_MEMORY 1
+#define NAIVE_USE_SHARED_MEMORY 0
 
 namespace StreamCompaction {
     namespace Naive {
@@ -43,8 +43,7 @@ namespace StreamCompaction {
 
             timer().startGpuTimer();
 #if NAIVE_USE_SHARED_MEMORY
-            Common::scanRecursive(kernScanBlock, 
-                Common::pickBlockSize<decltype(kernScanBlock)>,
+            Common::scanRecursive(kernScanBlock,
                 getSharedMemorySize, 
                 1,
                 n, 
@@ -114,9 +113,8 @@ namespace StreamCompaction {
         }
 
         void scanGpu(int n, int* dev_odata, int* dev_idata) {
-            int numBlocks = 0;
-            int blockSize = 0;
-            Common::pickBlockSize(kernScan, n, &numBlocks, &blockSize);
+            int blockSize = BLOCK_SIZE;
+            int numBlocks = divup(n, blockSize);
 
             // Perform double buffered scan algorithm
             int dMax = ilog2ceil(n);

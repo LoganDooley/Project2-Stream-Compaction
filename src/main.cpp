@@ -13,6 +13,8 @@
 #include <stream_compaction/thrust.h>
 #include "testing_helpers.hpp"
 
+#include "performanceTest.h"
+
 const int SIZE = 1 << 25; // feel free to change the size of array
 const int NPOT = SIZE - 3; // Non-Power-Of-Two
 int *a = new int[SIZE];
@@ -146,6 +148,8 @@ int main(int argc, char* argv[]) {
     printElapsedTime(StreamCompaction::Efficient::timer().getGpuElapsedTimeForPreviousOperation(), "(CUDA Measured)");
     //printArray(count, c, true);
     printCmpLenResult(count, expectedNPOT, b, c);
+
+    PerformanceSuite::runPerformanceTest(20, SIZE, NPOT, a, b, c);
 
     system("pause"); // stop Win32 console from closing on exit
     delete[] a;

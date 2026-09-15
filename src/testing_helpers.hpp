@@ -17,7 +17,7 @@ int cmpArrays(int n, T *a, T *b) {
     return 0;
 }
 
-void printDesc(const char *desc) {
+inline void printDesc(const char *desc) {
     printf("==== %s ====\n", desc);
 }
 
@@ -37,19 +37,19 @@ void printCmpLenResult(int n, int expN, T *a, T *b) {
             cmpArrays(n, a, b) ? "FAIL VALUE" : "passed");
 }
 
-void zeroArray(int n, int *a) {
+inline void zeroArray(int n, int *a) {
     for (int i = 0; i < n; i++) {
         a[i] = 0;
     }
 }
 
-void onesArray(int n, int *a) {
+inline void onesArray(int n, int *a) {
     for (int i = 0; i < n; i++) {
         a[i] = 1;
     }
 }
 
-void genArray(int n, int *a, int maxval) {
+inline void genArray(int n, int *a, int maxval) {
     srand(time(nullptr));
 
     for (int i = 0; i < n; i++) {
@@ -57,7 +57,7 @@ void genArray(int n, int *a, int maxval) {
     }
 }
 
-void printArray(int n, int *a, bool abridged = false) {
+inline void printArray(int n, int *a, bool abridged = false) {
     printf("    [ ");
     for (int i = 0; i < n; i++) {
         if (abridged && i + 2 == 15 && n > 16) {

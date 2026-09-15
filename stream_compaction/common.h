@@ -13,6 +13,8 @@
 #define FILENAME (strrchr(__FILE__, '/') ? strrchr(__FILE__, '/') + 1 : __FILE__)
 #define checkCUDAError(msg) checkCUDAErrorFn(msg, FILENAME, __LINE__)
 
+#define BLOCK_SIZE 64
+
 /**
  * Check for CUDA errors; print and exit if there was a problem.
  */
@@ -42,67 +44,16 @@ namespace StreamCompaction {
     namespace Common {
         __global__ void kernIncrementByBlockSums(int chunkSize, int n, int* dev_odata, const int* dev_blockSums);
 
-        template <typename KernelFunction>
-        void pickBlockSize(KernelFunction kernel, int n, int* numBlocks, int* blockSize) {
-            int minGridSize = 0;
-            int bestBlockSize = 0;
-
-            // Find what CUDA would recommend
-            cudaOccupancyMaxPotentialBlockSize(&minGridSize, &bestBlockSize, kernel, 0, 0);
-			checkCUDAError("cudaOccupancyMaxPotentialBlockSize failed");
-
-            // If our n is smaller than what cuda determines is the recommended size,
-            // find a multiple of 32 that fits
-            if (n < bestBlockSize) {
-                bestBlockSize = std::max(32, (n / 32) * 32);
-            }
-
-            *blockSize = bestBlockSize;
-            *numBlocks = (n + *blockSize - 1) / *blockSize;
-        }
-
-        template <typename KernelFunction>
-        void pickBlockSizePowOfTwo(KernelFunction kernel, int n, int* numBlocks, int* blockSize) {
-            int minGridSize = 0;
-            int bestBlockSize = 0;
-
-            // Find what CUDA would recommend
-            cudaOccupancyMaxPotentialBlockSize(&minGridSize, &bestBlockSize, kernel, 0, 0);
-			checkCUDAError("cudaOccupancyMaxPotentialBlockSize failed");
-
-            // If the best block size isn't a power of 2, round down to the nearest power of 2
-            if ((bestBlockSize & (bestBlockSize - 1)) != 0) {
-                int nextSmallestPowerOfTwo = 1;
-                while (nextSmallestPowerOfTwo * 2 <= bestBlockSize) {
-                    nextSmallestPowerOfTwo *= 2;
-                }
-                bestBlockSize = nextSmallestPowerOfTwo;
-            }
-
-            // If our n is smaller than the recommended block size, 
-            // find a power of 2 that fits
-            if (n < bestBlockSize) {
-                int fallback = 32; // Start from minimum warp size
-                while (fallback < n && fallback < bestBlockSize) {
-                    fallback *= 2;
-                }
-                bestBlockSize = fallback;
-            }
-
-            *blockSize = bestBlockSize;
-            *numBlocks = (n + *blockSize - 1) / *blockSize;
-        }
-
-        template <typename KernelFunc, typename ChunkSizeFunc, typename SharedMemorySizeFunc>
-        void scanRecursive(KernelFunc kernScanBlock, ChunkSizeFunc chunkSizeFunc, SharedMemorySizeFunc sharedMemorySizeFunc, int elementsPerThread, int n, int* dev_data) {
+        template <typename KernelFunc, typename SharedMemorySizeFunc>
+        void scanRecursive(KernelFunc kernScanBlock, SharedMemorySizeFunc sharedMemorySizeFunc, int elementsPerThread, int n, int* dev_data) {
             if (n <= 0) {
                 return;
             }
 
-            int numChunks = 0;
-            int chunkSize = 0;
-            chunkSizeFunc(kernScanBlock, n, &numChunks, &chunkSize);
+            int chunkSize = BLOCK_SIZE;
+            int numChunks = divup(n, chunkSize);
 
+            // Not all implementations need 1 thread per element
 			int threadsPerChunk = divup(chunkSize, elementsPerThread);
 
             size_t sharedMemorySize = sharedMemorySizeFunc(chunkSize);
@@ -124,7 +75,7 @@ namespace StreamCompaction {
 			checkCUDAError("kernScanBlock failed");
 
             // Scan the chunk sums
-            scanRecursive(kernScanBlock, chunkSizeFunc, sharedMemorySizeFunc, elementsPerThread, numChunks, dev_chunkSums);
+            scanRecursive(kernScanBlock, sharedMemorySizeFunc, elementsPerThread, numChunks, dev_chunkSums);
 
             // Increment sums by the chunk sums
             kernIncrementByBlockSums << <numChunks, chunkSize >> > (chunkSize, n, dev_data, dev_chunkSums);

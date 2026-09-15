@@ -8,7 +8,7 @@
 #define LOG_NUM_BANKS 5
 #define CONFLICT_FREE_OFFSET(n) ((n) >> LOG_NUM_BANKS)
 
-#define EFFICIENT_USE_SHARED_MEMORY 1
+#define EFFICIENT_USE_SHARED_MEMORY 0
 #define EFFICIENT_USE_COMPACTED_INDICES 0
 #define EFFICIENT_USE_CONFLICT_FREE_INDEXING 0
 
@@ -47,13 +47,12 @@ namespace StreamCompaction {
             timer().startGpuTimer();
 #if EFFICIENT_USE_SHARED_MEMORY
             Common::scanRecursive(kernScanBlock,
-                Common::pickBlockSizePowOfTwo<decltype(kernScanBlock)>,
                 getSharedMemorySize,
                 2,
                 nNew,
                 dev_data);
 #else
-            scanGpu(n_new, dev_data);
+            scanGpu(nNew, dev_data);
 #endif
             timer().endGpuTimer();
 
@@ -98,9 +97,8 @@ namespace StreamCompaction {
             int dMax = ilog2(n) - 1;
             int numThreads = n / 2;
             for (int d = 0; d <= dMax; d++) {
-                int numBlocks = 0;
-                int blockSize = 0;
-                Common::pickBlockSize(kernUpsweep, numThreads, &numBlocks, &blockSize);
+                int blockSize = BLOCK_SIZE;
+                int numBlocks = divup(numThreads, blockSize);
 
                 kernUpsweep << <numBlocks, blockSize >> > (n, numThreads, d, dev_data);
 
@@ -134,9 +132,8 @@ namespace StreamCompaction {
             int d_max = ilog2ceil(n) - 1;
             int numThreads = 1;
             for (int d = d_max; d >= 0; d--) {
-                int numBlocks = 0;
-                int blockSize = 0;
-                Common::pickBlockSize(kernDownsweep, numThreads, &numBlocks, &blockSize);
+                int blockSize = BLOCK_SIZE;
+                int numBlocks = divup(numThreads, blockSize);
 
                 kernDownsweep << <numBlocks, blockSize >> > (n, numThreads, d, dev_data);
 
@@ -231,18 +228,16 @@ namespace StreamCompaction {
         }
 
         void mapToBooleanGpu(int n, int* dev_bools, const int* dev_idata) {
-            int numBlocks = 0;
-            int blockSize = 0;
-            Common::pickBlockSize(Common::kernMapToBoolean, n, &numBlocks, &blockSize);
+            int blockSize = BLOCK_SIZE;
+            int numBlocks = divup(n, blockSize);
 
             Common::kernMapToBoolean << <numBlocks, blockSize >> > (n, dev_bools, dev_idata);
         }
 
         void scatterGpu(int n, int* dev_odata,
             const int* dev_idata, const int* dev_bools, const int* dev_indices) {
-            int numBlocks = 0;
-            int blockSize = 0;
-            Common::pickBlockSize(Common::kernScatter, n, &numBlocks, &blockSize);
+            int blockSize = BLOCK_SIZE;
+            int numBlocks = divup(n, blockSize);
 
             Common::kernScatter << <numBlocks, blockSize >> > (n, dev_odata, dev_idata, dev_bools, dev_indices);
         }
