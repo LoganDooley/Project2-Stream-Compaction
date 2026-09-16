@@ -15,7 +15,7 @@
 
 #include "performanceTest.h"
 
-#define PERFORMANCE_TEST 0
+#define PERFORMANCE_TEST 1
 #define NUM_SAMPLES 50
 
 const int SIZE = 1 << 25; // feel free to change the size of array

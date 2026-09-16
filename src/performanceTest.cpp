@@ -20,14 +20,14 @@ void PerformanceSuite::runPerformanceTest(int numSamples)
     printf("***********************\n");
 
     std::vector<int> sizes = {
-        (1 << 8) - 3,
-        (1 << 12) - 3,
-        (1 << 16) - 3,
-        (1 << 20) - 3,
-        (1 << 24) - 3
+        (1 << 8),
+        (1 << 12),
+        (1 << 16),
+        (1 << 20),
+        (1 << 24)
     };
 
-    std::cout << "\Sizes: [(1<<8) - 3, (1<<12) - 3, (1<<16) - 3, (1<<20) - 3, (1<<24) - 3]\n";
+    std::cout << "\Sizes: [1<<8, 1<<12, 1<<16, 1<<20, 1<<24]\n";
 
     runIndividualPerformanceTest("CPU Scan", 
         [](int n, int* out, int* in) {
@@ -107,7 +107,7 @@ void PerformanceSuite::runIndividualPerformanceTest(const std::string& testName,
         std::vector<float> runtimes(numSamples);
 
         // Run numSamples + 1 throwaway tests
-        for (int j = -3; j < numSamples; j++) {
+        for (int j = -5; j < numSamples; j++) {
             functionToTest(sizes[i], b, a);
             if (j >= 0) {
                 runtimes[j] = timerFunction();

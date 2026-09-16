@@ -8,8 +8,8 @@
 #define LOG_NUM_BANKS 5
 #define CONFLICT_FREE_OFFSET(n) ((n) >> LOG_NUM_BANKS)
 
-#define EFFICIENT_USE_SHARED_MEMORY 0
-#define EFFICIENT_USE_CONFLICT_FREE_INDEXING 0
+#define EFFICIENT_USE_SHARED_MEMORY 1
+#define EFFICIENT_USE_CONFLICT_FREE_INDEXING 1
 
 namespace StreamCompaction {
     namespace Efficient {

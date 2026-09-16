@@ -149,7 +149,13 @@ If we view the performance graph of runtime vs. array size from the original per
 #### Shared Memory Extensions
 One of the issues of the shared memory implementation is bank conflicts. These are prevalent in the work efficient implementation due to the stride based behavior leading to many threads within a block eventually trying to read indexes that are multiples of 32 of one another. In the GPU Gems article, these are addressed by adding padding to the array. In particular in shared memory only, while copying in the data from global memory, one piece of padding is placed every 32 elements such that each set of 32 is now offset by 1 element from that before it. This effectively reduces the number of bank conflicts substantially.
 
-While in theory this is is a good optimization to make, I did not see very different results with this optimization turned on or off.
+Running 50 samples on the work-efficient shared memory implementation for various array sizes with and without the conflict-free indexing optimization enabled yielded the following results for mean runtimes:
+
+![alt text](img/ScanEfficientConflictFree.png)
+
+![alt text](img/ScanEfficientConflictFreeLogScale.png)
+
+From this, we see that there is a significant improvement in performance for the conflict-free indexing approach as to not across all array sizes.
 
 ## CMake Changes
 
