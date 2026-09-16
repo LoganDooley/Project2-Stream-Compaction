@@ -6,13 +6,14 @@
 
 class PerformanceSuite {
 public:
-	static void runPerformanceTest(int numSamples, int SIZE, int NPOT, int* a, int* b, int* c);
+	static void runPerformanceTest(int numSamples);
 
 private:
 	static void runIndividualPerformanceTest(const std::string& testName,
-		std::function<void(int, int*, int*)> functionToTest,
-		std::function<float()> timerFunction,
-		int numSamples, int SIZE, int NPOT, int* a, int* b, int* c);
+        std::function<void(int, int*, int*)> functionToTest,
+        std::function<float()> timerFunction,
+        int numSamples,
+        std::vector<int> sizes);
 
 	static void getMeanStandardDeviation(std::vector<float> runtimes, float& outMean, float& outStandardDeviation);
 };

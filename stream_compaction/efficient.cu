@@ -9,7 +9,6 @@
 #define CONFLICT_FREE_OFFSET(n) ((n) >> LOG_NUM_BANKS)
 
 #define EFFICIENT_USE_SHARED_MEMORY 0
-#define EFFICIENT_USE_COMPACTED_INDICES 0
 #define EFFICIENT_USE_CONFLICT_FREE_INDEXING 0
 
 namespace StreamCompaction {
@@ -280,26 +279,16 @@ namespace StreamCompaction {
 
             // Upsweep
             for (int stride = 1; stride < chunkSize; stride *= 2) {
-#if EFFICIENT_USE_COMPACTED_INDICES
-                int active_threads = numElements / (stride * 2);
-                if(localIndex < active_threads) {
-                    // Get right-most index of this given stride
-                    int rightIndex = (localIndex + 1) * stride * 2 - 1;
-					int leftIndex = rightIndex - stride;
-#if EFFICIENT_USE_CONFLICT_FREE_INDEXING
-					rightIndex += CONFLICT_FREE_OFFSET(rightIndex);
-					leftIndex += CONFLICT_FREE_OFFSET(leftIndex);
-#endif
-                    temp[rightIndex] += temp[leftIndex];
-                }
-#else
                 // Get right-most index of this given stride
                 int rightIndex = (localIndex + 1) * stride * 2 - 1;
 				int leftIndex = rightIndex - stride;
                 if (rightIndex < chunkSize) {
+#if EFFICIENT_USE_CONFLICT_FREE_INDEXING
+                    rightIndex += CONFLICT_FREE_OFFSET(rightIndex);
+                    leftIndex += CONFLICT_FREE_OFFSET(leftIndex);
+#endif
                     temp[rightIndex] += temp[leftIndex];
                 }
-#endif
                 block.sync();
             }
 
@@ -318,29 +307,14 @@ namespace StreamCompaction {
 
             // Downsweep
             for (int stride = chunkSize / 2; stride >= 1; stride /= 2) {
-#if EFFICIENT_USE_COMPACTED_INDICES
-				int activeThreads = numElements / (stride * 2);
-                if(localIndex < activeThreads) {
-                    // Get right-most index of this given stride
-                    int rightIndex = (localIndex + 1) * stride * 2 - 1;
-                    int leftIndex = rightIndex - stride;
-
-#if EFFICIENT_USE_CONFLICT_FREE_INDEXING
-					rightIndex += CONFLICT_FREE_OFFSET(rightIndex);
-					leftIndex += CONFLICT_FREE_OFFSET(leftIndex);
-#endif
-
-                    int leftChild = temp[leftIndex];
-
-                    // Swap and add
-                    temp[leftIndex] = temp[rightIndex];
-                    temp[rightIndex] += leftChild;
-				}
-#else
                 // Get right most index of this given stride
                 int rightIndex = (localIndex + 1) * stride * 2 - 1;
                 int leftIndex = rightIndex - stride;
                 if (rightIndex < chunkSize) {
+#if EFFICIENT_USE_CONFLICT_FREE_INDEXING
+                    rightIndex += CONFLICT_FREE_OFFSET(rightIndex);
+                    leftIndex += CONFLICT_FREE_OFFSET(leftIndex);
+#endif
                     int leftChild = temp[leftIndex];
 
                     // Copy right into left
@@ -348,7 +322,7 @@ namespace StreamCompaction {
                     // Add left to the right
                     temp[rightIndex] += leftChild;
                 }
-#endif
+
                 block.sync();
             }
 

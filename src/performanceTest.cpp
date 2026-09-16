@@ -12,12 +12,22 @@
 #include <cmath>
 #include <iostream>
 
-void PerformanceSuite::runPerformanceTest(int numSamples, int SIZE, int NPOT, int* a, int* b, int* c)
+void PerformanceSuite::runPerformanceTest(int numSamples)
 {
     printf("\n");
     printf("***********************\n");
     printf("** PERFORMANCE TESTS **\n");
     printf("***********************\n");
+
+    std::vector<int> sizes = {
+        (1 << 8) - 3,
+        (1 << 12) - 3,
+        (1 << 16) - 3,
+        (1 << 20) - 3,
+        (1 << 24) - 3
+    };
+
+    std::cout << "\Sizes: [(1<<8) - 3, (1<<12) - 3, (1<<16) - 3, (1<<20) - 3, (1<<24) - 3]\n";
 
     runIndividualPerformanceTest("CPU Scan", 
         [](int n, int* out, int* in) {
@@ -25,7 +35,7 @@ void PerformanceSuite::runPerformanceTest(int numSamples, int SIZE, int NPOT, in
         },
         []() {
             return StreamCompaction::CPU::timer().getCpuElapsedTimeForPreviousOperation();
-        }, numSamples, SIZE, NPOT, a, b, c);
+        }, numSamples, sizes);
 
     runIndividualPerformanceTest("Naive Scan",
         [](int n, int* out, int* in) {
@@ -33,7 +43,7 @@ void PerformanceSuite::runPerformanceTest(int numSamples, int SIZE, int NPOT, in
         },
         []() {
             return StreamCompaction::Naive::timer().getGpuElapsedTimeForPreviousOperation();
-        }, numSamples, SIZE, NPOT, a, b, c);
+        }, numSamples, sizes);
 
     runIndividualPerformanceTest("Efficient Scan",
         [](int n, int* out, int* in) {
@@ -41,7 +51,7 @@ void PerformanceSuite::runPerformanceTest(int numSamples, int SIZE, int NPOT, in
         },
         []() {
             return StreamCompaction::Efficient::timer().getGpuElapsedTimeForPreviousOperation();
-        }, numSamples, SIZE, NPOT, a, b, c);
+        }, numSamples, sizes);
 
     runIndividualPerformanceTest("Thrust Scan",
         [](int n, int* out, int* in) {
@@ -49,7 +59,7 @@ void PerformanceSuite::runPerformanceTest(int numSamples, int SIZE, int NPOT, in
         },
         []() {
             return StreamCompaction::Thrust::timer().getGpuElapsedTimeForPreviousOperation();
-        }, numSamples, SIZE, NPOT, a, b, c);
+        }, numSamples, sizes);
 
     runIndividualPerformanceTest("CPU Compact w/o scan",
         [](int n, int* out, int* in) {
@@ -57,7 +67,7 @@ void PerformanceSuite::runPerformanceTest(int numSamples, int SIZE, int NPOT, in
         },
         []() {
             return StreamCompaction::CPU::timer().getCpuElapsedTimeForPreviousOperation();
-        }, numSamples, SIZE, NPOT, a, b, c);
+        }, numSamples, sizes);
 
     runIndividualPerformanceTest("CPU Compact w/ scan",
         [](int n, int* out, int* in) {
@@ -65,7 +75,7 @@ void PerformanceSuite::runPerformanceTest(int numSamples, int SIZE, int NPOT, in
         },
         []() {
             return StreamCompaction::CPU::timer().getCpuElapsedTimeForPreviousOperation();
-        }, numSamples, SIZE, NPOT, a, b, c);
+        }, numSamples, sizes);
 
     runIndividualPerformanceTest("GPU Compact",
         [](int n, int* out, int* in) {
@@ -73,44 +83,63 @@ void PerformanceSuite::runPerformanceTest(int numSamples, int SIZE, int NPOT, in
         },
         []() {
             return StreamCompaction::Efficient::timer().getGpuElapsedTimeForPreviousOperation();
-        }, numSamples, SIZE, NPOT, a, b, c);
+        }, numSamples, sizes);
 }
 
-void PerformanceSuite::runIndividualPerformanceTest(const std::string& testName, std::function<void(int, int*, int*)> functionToTest, std::function<float()> timerFunction, int numSamples, int SIZE, int NPOT, int* a, int* b, int* c)
+void PerformanceSuite::runIndividualPerformanceTest(const std::string& testName,
+    std::function<void(int, int*, int*)> functionToTest,
+    std::function<float()> timerFunction,
+    int numSamples,
+    std::vector<int> sizes)
 {
-    genArray(SIZE - 1, a, 50);
-    a[SIZE - 1] = 0;
+    std::vector<float> meanRuntimes(sizes.size());
+    std::vector<float> standardDeviations(sizes.size());
+
+    for (int i = 0; i < sizes.size(); i++) {
+        int* a = new int[sizes[i]];
+        int* b = new int[sizes[i]];
+
+        genArray(sizes[i] - 1, a, 50);
+        a[sizes[i] - 1] = 0;
+
+        float meanRuntime = 0;
+        float stdDevRuntime = 0;
+        std::vector<float> runtimes(numSamples);
+
+        // Run numSamples + 1 throwaway tests
+        for (int j = -3; j < numSamples; j++) {
+            functionToTest(sizes[i], b, a);
+            if (j >= 0) {
+                runtimes[j] = timerFunction();
+            }
+
+            std::this_thread::sleep_for(std::chrono::milliseconds(20));
+        }
+
+        getMeanStandardDeviation(runtimes, meanRuntimes[i], standardDeviations[i]);
+
+        delete[] a;
+        delete[] b;
+    }
 
     std::cout << testName << "\n";
-    float meanRuntime = 0;
-    float stdDevRuntime = 0;
-    std::vector<float> runtimes(numSamples);
-
-    // Test power of 2 size
-    for (int i = -1; i < numSamples; i++) {
-        functionToTest(SIZE, b, a);
-        if (i >= 0) {
-            runtimes[i] = timerFunction();
+    std::cout << "\tRuntimes (ms): [";
+    for (size_t i = 0; i < meanRuntimes.size(); ++i) {
+        std::cout << meanRuntimes[i];
+        if (i < meanRuntimes.size() - 1) {
+            std::cout << ", ";
         }
-
-        std::this_thread::sleep_for(std::chrono::milliseconds(20));
     }
+    std::cout << "]\n";
 
-    getMeanStandardDeviation(runtimes, meanRuntime, stdDevRuntime);
-    std::cout << "\t[Power-of-Two] Mean: " << meanRuntime << " ms, StdDev: " << stdDevRuntime << " ms\n";
-
-    // Test non-power of 2 size
-    for (int i = -1; i < numSamples; i++) {
-        functionToTest(NPOT, c, a);
-        if (i >= 0) {
-            runtimes[i] = timerFunction();
+    std::cout << "\tStandard Deviations: [";
+    for (size_t i = 0; i < standardDeviations.size(); ++i) {
+        std::cout << standardDeviations[i];
+        if (i < standardDeviations.size() - 1) {
+            std::cout << ", ";
         }
-
-        std::this_thread::sleep_for(std::chrono::milliseconds(20));
     }
-
-    getMeanStandardDeviation(runtimes, meanRuntime, stdDevRuntime);
-    std::cout << "\t[Non-Power-of-Two] Mean: " << meanRuntime << " ms, StdDev: " << stdDevRuntime << " ms\n";
+    std::cout << "]\n";
 }
 
 void PerformanceSuite::getMeanStandardDeviation(std::vector<float> runtimes, float& outMean, float& outStandardDeviation)

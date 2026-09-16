@@ -15,6 +15,9 @@
 
 #include "performanceTest.h"
 
+#define PERFORMANCE_TEST 0
+#define NUM_SAMPLES 50
+
 const int SIZE = 1 << 25; // feel free to change the size of array
 const int NPOT = SIZE - 3; // Non-Power-Of-Two
 int *a = new int[SIZE];
@@ -149,7 +152,9 @@ int main(int argc, char* argv[]) {
     //printArray(count, c, true);
     printCmpLenResult(count, expectedNPOT, b, c);
 
-    PerformanceSuite::runPerformanceTest(20, SIZE, NPOT, a, b, c);
+#if PERFORMANCE_TEST
+    PerformanceSuite::runPerformanceTest(NUM_SAMPLES);
+#endif
 
     system("pause"); // stop Win32 console from closing on exit
     delete[] a;
