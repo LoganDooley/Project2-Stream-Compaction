@@ -109,11 +109,37 @@ From NSight Systems, the timeline of the thrust scan implementation is as follow
 
 ![alt text](img/ThrustScanTimeline.png)
 
-cudaStreamaSynchronize is an event used to wait for an asynchronous kernel launch to complete, so that time is mostly dedicated to the scan kernel actually performing. As a result, the vast majority of thrust's implementation is spent in the actual kernel, with relatively minor contributions from a cudaMalloc call at the start and cudaFree at the end.
+cudaStreamaSynchronize is an event used to wait for an asynchronous kernel launch to complete, so that time is mostly dedicated to the scan kernel actually performing. As a result, the vast majority of thrust's implementation is spent in the actual kernel, with relatively minor contributions from a cudaMalloc call at the start and cudaFree at the end. It is also notable that thrust appears to only launch a single "static_kernel" for each scan, which is likely a big benefit compared to the naive and work efficient implementations here which launch multiple kernels to complete.
 
 ### Bottlenecks
 
+For this analysis, I used my implementations without shared memory to compare on the base algorithm implementations.
 
+#### Naive GPU Scan
+
+The naive scan kernel itself is quite efficient. NSight Compute shows the following:
+
+![alt text](img/NaiveScanKernel.png)
+
+As a result, it is likely that the bottleneck of this algorithm is the repeated kernel invocations from the CPU as the tree is traversed to compute the scan.
+
+#### Work-Efficient GPU Scan
+
+For the work efficient scan, the biggest bottleneck currently is the very low occupancy at the narrowest parts of the up/down sweep. For example NSight Compute shows:
+
+![alt text](img/KernUpsweep.png)
+
+For the downsweep it shows:
+
+![alt text](img/KernDownsweep.png)
+
+As you can see, for the larger grid sizes, the estimated speedup is much smaller than the smaller ones, which are used when we are only deploying a couple of threads at the neck of the up/down sweep procedure. This could potentially be improved by instead having the kernels part way up the pyramid begin to compute more elements so that we can get by without launching new kernels for such small numbers of threads.
+
+#### GPU Stream Compaction w/ Work-Efficient Scan
+
+For stream compaction, the biggest bottleneck is a memcopy I have in the middle of the algorithm so that I can do a scan over the mapped boolean array. Even though this was a device to device copy, it is suprisingly slow. This could be remedied by instead having the kernMapToBoolean kernel write to two separate buffers directly to avoid a copy. The actual mapping to boolean, scan, and scatter operations are quite small in comparison:
+
+![alt text](img/Compaction.png)
 
 ## Extra Credit/Features
 
@@ -159,7 +185,32 @@ From this, we see that there is a significant improvement in performance for the
 
 ## CMake Changes
 
-N/A
+I had added the following to the bottom of the CMakeLists.txt to get the code to compile in CUDA 13.2+
+
+```
+if(MSVC)
+    target_compile_options(stream_compaction PRIVATE 
+        "$<$<COMPILE_LANGUAGE:CUDA>:-Xcompiler=/Zc:preprocessor>"
+    )
+endif()
+```
 
 ## Build Information
 
+How to build from command line:
+``` 
+cmake -S . -B build
+cmake --build build --config Release
+.\build\bin\Release\cis5650_stream_compaction_test.exe
+```
+
+There are a couple preprocessor directives that can be set in various files to enable various extra credit features or run additional performance tests. They are as follows:
+
+| Preprocessor Def | File | Effect on Program |
+| :---     | :---:    | :---:     |
+| PERFORMANCE_TEST | main.cpp | When set to 1, a performance test will run after the contents in main. This test is found in the performanceTest.h/.cpp files. |
+| NUM_SAMPLES | main.cpp | This dictates the number of samples per test in the performance test will run for calculating means and standard deviations. This is only used when PERFORMANCE_TEST is set to 1. |
+| NAIVE_USE_SHARED_MEMORY | naive.cu | When set to 1, shared memory will be used in the naive scan implementation. |
+| EFFICIENT_USE_SHARED_MEMORY | efficient.cu | When set to 1, shared memory will be used in the work-efficient scan implementation. |
+| EFFICIENT_USE_CONFLICT_FREE_INDEXING | efficient.cu | When set to 1 alongside EFFICIENT_USE_SHARED_MEMORY being set to 1, the shared memory implementation will use padding to reduce bank conflicts in the algorithm. |
+| BLOCK_SIZE | common.h | Controls the block size for every kernel invocation in the project. |
