@@ -195,6 +195,8 @@ if(MSVC)
 endif()
 ```
 
+I also added the performanceTest.h and performanceTest.cpp files to the cmake sources for the cis565_stream_compaction_test project.
+
 ## Build Information
 
 How to build from command line:

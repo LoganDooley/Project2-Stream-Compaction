@@ -50,8 +50,7 @@ namespace StreamCompaction {
                 dev_idata);
             output = dev_idata;
 #else
-            scanGpu(n, dev_odata, dev_idata);
-            output = dev_odata;
+            output = scanGpu(n, dev_odata, dev_idata);
 #endif
             timer().endGpuTimer();
 
@@ -70,14 +69,14 @@ namespace StreamCompaction {
             return (dividend + divisor - 1) / divisor;
         }
 
-        __global__ void kernRightShift(int n, int* dev_data) {
+        __global__ void kernRightShift(int n, int* dev_idata, int* dev_odata) {
             int index = blockDim.x * blockIdx.x + threadIdx.x;
             
             if (index >= n) {
                 return;
             }
 
-            dev_data[index] = index == 0 ? 0 : dev_data[index - 1];
+            dev_odata[index] = index == 0 ? 0 : dev_idata[index - 1];
         }
 
         __global__ void kernScan(int n, int offset, int* dev_odata, const int* dev_idata) {
@@ -95,24 +94,7 @@ namespace StreamCompaction {
             }
         }
 
-        __global__ void kernScanRightShifted(int n, int offset, int* dev_odata, const int* dev_idata) {
-            int k = blockDim.x * blockIdx.x + threadIdx.x;
-
-            if (k >= n) {
-                return;
-            }
-
-            if (k >= offset) {
-                int a = k - offset - 1 >= 0 ? dev_idata[k - offset - 1] : 0;
-                int b = k - 1 >= 0 ? dev_idata[k - 1] : 0;
-                dev_odata[k] = a + b;
-            }
-            else {
-                dev_odata[k] = k - 1 >= 1 ? dev_idata[k - 1] : 0;
-            }
-        }
-
-        void scanGpu(int n, int* dev_odata, int* dev_idata) {
+        int* scanGpu(int n, int* dev_odata, int* dev_idata) {
             int blockSize = BLOCK_SIZE;
             int numBlocks = divup(n, blockSize);
 
@@ -121,17 +103,14 @@ namespace StreamCompaction {
 
             int offset = 1;
             for (int d = 1; d <= dMax; d++) {
-                if (d == 1) {
-                    kernScanRightShifted << <numBlocks, blockSize >> > (n, offset, dev_odata, dev_idata);
-                }
-                else {
-                    kernScan << <numBlocks, blockSize >> > (n, offset, dev_odata, dev_idata);
-                }
+                kernScan << <numBlocks, blockSize >> > (n, offset, dev_odata, dev_idata);
                 std::swap(dev_odata, dev_idata);
                 offset *= 2;
             }
+            
+            kernRightShift << <numBlocks, blockSize >> > (n, dev_idata, dev_odata);
 
-            std::swap(dev_odata, dev_idata);
+            return dev_odata;
         }
 
         __global__ void kernScanBlock(int chunkSize, int n, int* dev_data, int* dev_blockSums) {

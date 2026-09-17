@@ -6,9 +6,9 @@ namespace StreamCompaction {
     namespace Naive {
         StreamCompaction::Common::PerformanceTimer& timer();
 
-        void scan(int n, int *odata, const int *idata);
+        void scan(int n, int* odata, const int* idata);
 
-        void scanGpu(int n, int* dev_odata, int* dev_idata);
+        int* scanGpu(int n, int* dev_odata, int* dev_idata);
 
         __global__ void kernScanBlock(int chunkSize, int n, int* dev_data, int* dev_blockSums);
 
