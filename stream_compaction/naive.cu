@@ -1,10 +1,14 @@
 #include <cuda.h>
 #include <cuda_runtime.h>
+#include <cuda/barrier>
+#include <cooperative_groups.h>
 #include "common.h"
 #include "naive.h"
 
 #include <cmath>
 #include <algorithm>
+
+#define NAIVE_USE_SHARED_MEMORY 0
 
 namespace StreamCompaction {
     namespace Naive {
@@ -14,31 +18,52 @@ namespace StreamCompaction {
             static PerformanceTimer timer;
             return timer;
         }
-        // TODO: __global__
 
         /**
          * Performs prefix-sum (aka scan) on idata, storing the result into odata.
          */
         void scan(int n, int *odata, const int *idata) {
-            timer().startGpuTimer();
+            if (n <= 0) {
+                return;
+			}
+
             // Allocate buffers
             int* dev_idata;
             int* dev_odata;
             cudaMalloc((void**)&dev_idata, n * sizeof(int));
+            checkCUDAError("cudaMalloc dev_idata failed!");
             cudaMalloc((void**)&dev_odata, n * sizeof(int));
+			checkCUDAError("cudaMalloc dev_odata failed!");
 
             // Copy input to CPU
             cudaMemcpy(dev_idata, idata, n * sizeof(int), cudaMemcpyHostToDevice);
+			checkCUDAError("cudaMemcpy idata to dev_idata failed!");
 
-            int* dev_result = scan_gpu(n, dev_odata, dev_idata);
+            int* output = 0;
+
+            timer().startGpuTimer();
+#if NAIVE_USE_SHARED_MEMORY
+            Common::scanRecursive(kernScanBlock,
+                getSharedMemorySize, 
+                1,
+                n, 
+                dev_idata);
+            output = dev_idata;
+#else
+            scanGpu(n, dev_odata, dev_idata);
+            output = dev_odata;
+#endif
+            timer().endGpuTimer();
 
             // Copy output to CPU
-            cudaMemcpy(odata, dev_result, n * sizeof(int), cudaMemcpyDeviceToHost);
+            cudaMemcpy(odata, output, n * sizeof(int), cudaMemcpyDeviceToHost);
+			checkCUDAError("cudaMemcpy dev_odata to odata failed!");
 
             // Free buffers
             cudaFree(dev_odata);
+			checkCUDAError("cudaFree dev_odata failed!");
             cudaFree(dev_idata);
-            timer().endGpuTimer();
+			checkCUDAError("cudaFree dev_idata failed!");
         }
 
         __host__ __device__ int divup(int dividend, int divisor) {
@@ -87,16 +112,15 @@ namespace StreamCompaction {
             }
         }
 
-        int* scan_gpu(int n, int* dev_odata, int* dev_idata) {
-            int numBlocks = 0;
-            int blockSize = 0;
-            pick_block_size(kernScan, n, &numBlocks, &blockSize);
+        void scanGpu(int n, int* dev_odata, int* dev_idata) {
+            int blockSize = BLOCK_SIZE;
+            int numBlocks = divup(n, blockSize);
 
             // Perform double buffered scan algorithm
-            int d_max = ilog2ceil(n);
+            int dMax = ilog2ceil(n);
 
             int offset = 1;
-            for (int d = 1; d <= d_max; d++) {
+            for (int d = 1; d <= dMax; d++) {
                 if (d == 1) {
                     kernScanRightShifted << <numBlocks, blockSize >> > (n, offset, dev_odata, dev_idata);
                 }
@@ -107,7 +131,62 @@ namespace StreamCompaction {
                 offset *= 2;
             }
 
-            return dev_idata;
+            std::swap(dev_odata, dev_idata);
+        }
+
+        __global__ void kernScanBlock(int chunkSize, int n, int* dev_data, int* dev_blockSums) {
+            extern __shared__ int temp[];
+
+            __shared__ cuda::barrier<cuda::thread_scope_block> bar;
+            auto block = cooperative_groups::this_thread_block();
+
+            if (block.thread_rank() == 0)
+            {
+                init(&bar, block.size());
+            }
+            block.sync();
+
+            int localIndex = threadIdx.x;
+            int globalIndex = blockDim.x * blockIdx.x + threadIdx.x;
+
+            // Indices to fake double buffering
+            int pout = 0;
+            int pin = 1;
+
+            // Load data from global memory
+            temp[pout * blockDim.x + localIndex] = (globalIndex < n) ? dev_data[globalIndex] : 0;
+            block.sync();
+
+            // Do sum in shared memory by "ping-pong"ing the two halves of the shared memory segment
+            for (int offset = 1; offset < blockDim.x; offset *= 2) {
+                // Ping pong by flipping the out and in flags
+                pout = 1 - pout;
+                pin = 1 - pin;
+
+                if (localIndex >= offset) {
+                    temp[pout * blockDim.x + localIndex] = temp[pin * blockDim.x + localIndex - offset] + temp[pin * blockDim.x + localIndex];
+                }
+                else {
+                    temp[pout * blockDim.x + localIndex] = temp[pin * blockDim.x + localIndex];
+                }
+                block.sync();
+            }
+
+            // Write back block sum 
+            if (dev_blockSums != nullptr && localIndex == blockDim.x - 1) {
+                dev_blockSums[blockIdx.x] = temp[pout * blockDim.x + localIndex];
+            }
+            block.sync();
+
+            // Convert to exclusive scan and write back to global memory
+            if (globalIndex < n) {
+                dev_data[globalIndex] = (localIndex == 0) ? 0 : temp[pout * blockDim.x + localIndex - 1];
+            }
+        }
+
+        __host__ int getSharedMemorySize(int blockSize)
+        {
+            return blockSize * sizeof(int) * 2;
         }
     }
 }

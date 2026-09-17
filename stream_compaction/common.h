@@ -13,6 +13,8 @@
 #define FILENAME (strrchr(__FILE__, '/') ? strrchr(__FILE__, '/') + 1 : __FILE__)
 #define checkCUDAError(msg) checkCUDAErrorFn(msg, FILENAME, __LINE__)
 
+#define BLOCK_SIZE 256
+
 /**
  * Check for CUDA errors; print and exit if there was a problem.
  */
@@ -34,25 +36,55 @@ inline int ipow2(unsigned int x) {
     return 1 << x;
 }
 
-template <typename KernelFunction>
-void pick_block_size(KernelFunction kernel, int n, int* num_blocks, int* block_size) {
-    int min_grid_size = 0;
-    int best_block_size = 0;
-
-    cudaOccupancyMaxPotentialBlockSize(&min_grid_size, &best_block_size, kernel, 0, 0);
-
-    // If our n is smaller than what cuda determines is the recommended size,
-    // find a multiple of 32 that fits
-    if (n < best_block_size) {
-        best_block_size = std::max(32, (n / 32) * 32);
-    }
-
-    *block_size = best_block_size;
-    *num_blocks = (n + *block_size - 1) / *block_size;
+inline int divup(int a, int b) {
+    return (a + b - 1) / b;
 }
 
 namespace StreamCompaction {
     namespace Common {
+        __global__ void kernIncrementByBlockSums(int chunkSize, int n, int* dev_odata, const int* dev_blockSums);
+
+        template <typename KernelFunc, typename SharedMemorySizeFunc>
+        void scanRecursive(KernelFunc kernScanBlock, SharedMemorySizeFunc sharedMemorySizeFunc, int elementsPerThread, int n, int* dev_data) {
+            if (n <= 0) {
+                return;
+            }
+
+            int chunkSize = BLOCK_SIZE;
+            int numChunks = divup(n, chunkSize);
+
+            // Not all implementations need 1 thread per element
+			int threadsPerChunk = divup(chunkSize, elementsPerThread);
+
+            size_t sharedMemorySize = sharedMemorySizeFunc(chunkSize);
+
+            if (numChunks <= 1) {
+                // Base case
+                kernScanBlock << <numChunks, threadsPerChunk, sharedMemorySize >> > (chunkSize, n, dev_data, nullptr);
+				checkCUDAError("kernScanBlock failed");
+                return;
+            }
+
+            // Allocate buffer for chunk sums
+            int* dev_chunkSums;
+            cudaMalloc((void**)&dev_chunkSums, numChunks * sizeof(int));
+			checkCUDAError("cudaMalloc dev_chunkSums failed");
+
+            // Scan each chunk separately
+            kernScanBlock << <numChunks, threadsPerChunk, sharedMemorySize >> > (chunkSize, n, dev_data, dev_chunkSums);
+			checkCUDAError("kernScanBlock failed");
+
+            // Scan the chunk sums
+            scanRecursive(kernScanBlock, sharedMemorySizeFunc, elementsPerThread, numChunks, dev_chunkSums);
+
+            // Increment sums by the chunk sums
+            kernIncrementByBlockSums << <numChunks, chunkSize >> > (chunkSize, n, dev_data, dev_chunkSums);
+			checkCUDAError("kernIncrementByBlockSums failed");
+
+            cudaFree(dev_chunkSums);
+			checkCUDAError("cudaFree dev_chunkSums failed");
+        }
+
         __global__ void kernMapToBoolean(int n, int *bools, const int *idata);
 
         __global__ void kernScatter(int n, int *odata,
